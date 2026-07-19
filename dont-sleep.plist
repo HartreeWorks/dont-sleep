@@ -1,0 +1,53 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  LaunchDaemon template for dont-sleep.sh. Runs at boot AS ROOT (so no
+  sudo password is needed) and stays running (KeepAlive).
+
+  EDIT TWO PLACEHOLDERS before installing:
+    1. /ABSOLUTE/PATH/TO/dont-sleep.sh  (in ProgramArguments)
+    2. YOUR_USERNAME  (DONT_SLEEP_USER and StandardErrorPath) — a daemon has no
+       SUDO_USER, so this tells the script whose home to read transcripts from
+       and write the log under.
+
+  Install:
+    sudo cp dont-sleep.plist /Library/LaunchDaemons/com.example.dont-sleep.plist
+    sudo chown root:wheel /Library/LaunchDaemons/com.example.dont-sleep.plist
+    sudo chmod 644        /Library/LaunchDaemons/com.example.dont-sleep.plist
+    sudo launchctl bootstrap system /Library/LaunchDaemons/com.example.dont-sleep.plist
+  Uninstall:
+    sudo launchctl bootout system /Library/LaunchDaemons/com.example.dont-sleep.plist
+    sudo rm /Library/LaunchDaemons/com.example.dont-sleep.plist
+-->
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>com.example.dont-sleep</string>
+
+  <key>ProgramArguments</key>
+  <array>
+    <string>/ABSOLUTE/PATH/TO/dont-sleep.sh</string>
+    <string>50</string>
+  </array>
+
+  <key>EnvironmentVariables</key>
+  <dict>
+    <key>DONT_SLEEP_USER</key>
+    <string>YOUR_USERNAME</string>
+  </dict>
+
+  <key>RunAtLoad</key>
+  <true/>
+  <key>KeepAlive</key>
+  <true/>
+  <key>ProcessType</key>
+  <string>Background</string>
+
+  <!-- stdout is redundant with the pruned activity log, so discard it; keep
+       stderr for diagnostics (rare — startup warnings / unexpected errors). -->
+  <key>StandardOutPath</key>
+  <string>/dev/null</string>
+  <key>StandardErrorPath</key>
+  <string>/Users/YOUR_USERNAME/Library/Logs/dont-sleep.daemon.err</string>
+</dict>
+</plist>

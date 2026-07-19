@@ -1,0 +1,276 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+SCRIPT="${REPO_ROOT}/dont-sleep.sh"
+TEST_TMP="$(mktemp -d "${TMPDIR:-/tmp}/dont-sleep-tests.XXXXXX")"
+failures=0
+
+cleanup() {
+  if command -v trash >/dev/null 2>&1; then
+    trash "${TEST_TMP}" >/dev/null 2>&1 || true
+  else
+    /bin/rm -R "${TEST_TMP}" >/dev/null 2>&1 || true
+  fi
+}
+trap cleanup EXIT
+
+pass() { printf 'ok - %s\n' "$1"; }
+fail() { printf 'not ok - %s: %s\n' "$1" "$2" >&2; failures=$((failures + 1)); }
+
+assert_eq() {
+  local name="$1" expected="$2" actual="$3"
+  if [[ "${actual}" == "${expected}" ]]; then pass "${name}"; else fail "${name}" "expected '${expected}', got '${actual}'"; fi
+}
+
+make_stale() {
+  local path="$1" minutes="$2" stamp
+  if date -v-"${minutes}"M '+%Y%m%d%H%M.%S' >/dev/null 2>&1; then
+    stamp="$(date -v-"${minutes}"M '+%Y%m%d%H%M.%S')"
+    touch -t "${stamp}" "${path}"
+  else
+    touch -d "${minutes} minutes ago" "${path}"
+  fi
+}
+
+write_fixture() {
+  local path="$1" kind="$2"
+  case "${kind}" in
+    claude-pending)
+      printf '%s\n' '{"type":"assistant","message":{"role":"assistant","content":[{"type":"tool_use","id":"toolu_1","name":"Bash","input":{}}]}}' > "${path}"
+      ;;
+    claude-complete)
+      write_fixture "${path}" claude-pending
+      printf '%s\n' '{"type":"user","message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"toolu_1","content":"done"}]}}' >> "${path}"
+      ;;
+    claude-abandoned)
+      write_fixture "${path}" claude-pending
+      printf '%s\n' '{"type":"user","message":{"role":"user","content":"new prompt"}}' >> "${path}"
+      ;;
+    claude-parallel-one-pending)
+      write_fixture "${path}" claude-pending
+      printf '%s\n' '{"type":"assistant","message":{"role":"assistant","content":[{"type":"tool_use","id":"toolu_2","name":"Bash","input":{}}]}}' >> "${path}"
+      printf '%s\n' '{"type":"user","message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"toolu_2","content":"done"}]}}' >> "${path}"
+      ;;
+    claude-waiting-for-user)
+      printf '%s\n' '{"type":"assistant","message":{"role":"assistant","content":[{"type":"tool_use","id":"toolu_ask","name":"AskUserQuestion","input":{}}]}}' > "${path}"
+      ;;
+    claude-meta-during-tool)
+      write_fixture "${path}" claude-pending
+      printf '%s\n' '{"type":"user","isMeta":true,"message":{"role":"user","content":"internal metadata"}}' >> "${path}"
+      ;;
+    codex-pending)
+      printf '%s\n' '{"type":"event_msg","payload":{"type":"task_started"}}' > "${path}"
+      printf '%s\n' '{"type":"response_item","payload":{"type":"custom_tool_call","call_id":"call_1","name":"exec","status":"completed"}}' >> "${path}"
+      ;;
+    codex-complete)
+      write_fixture "${path}" codex-pending
+      printf '%s\n' '{"type":"response_item","payload":{"type":"custom_tool_call_output","call_id":"call_1","output":"done"}}' >> "${path}"
+      ;;
+    codex-task-complete)
+      write_fixture "${path}" codex-pending
+      printf '%s\n' '{"type":"event_msg","payload":{"type":"task_complete"}}' >> "${path}"
+      ;;
+    codex-waiting-for-user)
+      printf '%s\n' '{"type":"event_msg","payload":{"type":"task_started"}}' > "${path}"
+      printf '%s\n' '{"type":"response_item","payload":{"type":"function_call","call_id":"call_ask","name":"request_user_input"}}' >> "${path}"
+      ;;
+    codex-generic-pending)
+      printf '%s\n' '{"type":"event_msg","payload":{"type":"task_started"}}' > "${path}"
+      printf '%s\n' '{"type":"response_item","payload":{"type":"local_shell_call","call_id":"call_shell","name":"shell"}}' >> "${path}"
+      ;;
+    codex-generic-complete)
+      write_fixture "${path}" codex-generic-pending
+      printf '%s\n' '{"type":"response_item","payload":{"type":"local_shell_call_output","call_id":"call_shell","output":"done"}}' >> "${path}"
+      ;;
+  esac
+}
+
+test_activity_signal() {
+  local functions claude_dir="${TEST_TMP}/claude" codex_dir="${TEST_TMP}/codex" fixture
+  mkdir -p "${claude_dir}" "${codex_dir}"
+  functions="$(awk '
+    /^session_has_outstanding_tool\(\)/ { capture=1 }
+    /^track_session_file\(\)/ { capture=1 }
+    /^agents_active\(\)/ { capture=1 }
+    capture { print }
+    capture && /^}/ { capture=0 }
+  ' "${SCRIPT}")"
+  eval "${functions}"
+  if ! declare -F session_has_outstanding_tool >/dev/null; then
+    fail "activity helper exists" "session_has_outstanding_tool is missing"
+    return
+  fi
+
+  CLAUDE_SESSIONS_DIR="${claude_dir}"
+  CODEX_SESSIONS_DIR="${codex_dir}"
+  AGENT_GRACE_MINUTES=5
+  OUTSTANDING_TOOL_MAX_MINUTES=720
+  SESSION_DISCOVERY_INTERVAL_SECONDS=120
+  JQ_BIN=/usr/bin/jq
+  ACTIVITY_TRACKER_SEEDED=1
+  last_session_discovery=0
+  TRACKED_SESSION_FILES=()
+  ACTIVE_PENDING_FILE=""
+  ACTIVE_PENDING_MTIME=""
+
+  fixture="${claude_dir}/pending.jsonl"
+  write_fixture "${fixture}" claude-pending
+  make_stale "${fixture}" 10
+  session_has_outstanding_tool "${fixture}" && pass "Claude pending tool is active" || fail "Claude pending tool is active" "reported inactive"
+  TRACKED_SESSION_FILES=("${fixture}")
+  agents_active && pass "stale Claude transcript with pending tool is active" || fail "stale Claude transcript with pending tool is active" "reported inactive"
+
+  mv "${fixture}" "${fixture}.used"
+  fixture="${claude_dir}/complete.jsonl"
+  write_fixture "${fixture}" claude-complete
+  make_stale "${fixture}" 10
+  session_has_outstanding_tool "${fixture}" && fail "Claude completed tool is inactive" "reported active" || pass "Claude completed tool is inactive"
+
+  fixture="${claude_dir}/abandoned.jsonl"
+  write_fixture "${fixture}" claude-abandoned
+  make_stale "${fixture}" 10
+  session_has_outstanding_tool "${fixture}" && fail "Claude new prompt clears abandoned tool" "reported active" || pass "Claude new prompt clears abandoned tool"
+
+  fixture="${claude_dir}/parallel.jsonl"
+  write_fixture "${fixture}" claude-parallel-one-pending
+  make_stale "${fixture}" 10
+  session_has_outstanding_tool "${fixture}" && pass "Claude parallel calls retain unfinished call" || fail "Claude parallel calls retain unfinished call" "reported inactive"
+
+  fixture="${claude_dir}/waiting.jsonl"
+  write_fixture "${fixture}" claude-waiting-for-user
+  make_stale "${fixture}" 10
+  session_has_outstanding_tool "${fixture}" && fail "Claude user-input tool is inactive" "reported active" || pass "Claude user-input tool is inactive"
+
+  fixture="${claude_dir}/meta-during-tool.jsonl"
+  write_fixture "${fixture}" claude-meta-during-tool
+  make_stale "${fixture}" 10
+  session_has_outstanding_tool "${fixture}" && pass "Claude metadata does not clear pending tool" || fail "Claude metadata does not clear pending tool" "reported inactive"
+
+  fixture="${codex_dir}/pending.jsonl"
+  write_fixture "${fixture}" codex-pending
+  make_stale "${fixture}" 10
+  session_has_outstanding_tool "${fixture}" && pass "Codex pending tool is active" || fail "Codex pending tool is active" "reported inactive"
+
+  fixture="${codex_dir}/complete.jsonl"
+  write_fixture "${fixture}" codex-complete
+  make_stale "${fixture}" 10
+  session_has_outstanding_tool "${fixture}" && fail "Codex completed tool is inactive" "reported active" || pass "Codex completed tool is inactive"
+
+  fixture="${codex_dir}/task-complete.jsonl"
+  write_fixture "${fixture}" codex-task-complete
+  make_stale "${fixture}" 10
+  session_has_outstanding_tool "${fixture}" && fail "Codex task completion clears pending tool" "reported active" || pass "Codex task completion clears pending tool"
+
+  fixture="${codex_dir}/waiting.jsonl"
+  write_fixture "${fixture}" codex-waiting-for-user
+  make_stale "${fixture}" 10
+  session_has_outstanding_tool "${fixture}" && fail "Codex user-input tool is inactive" "reported active" || pass "Codex user-input tool is inactive"
+
+  fixture="${codex_dir}/generic-pending.jsonl"
+  write_fixture "${fixture}" codex-generic-pending
+  make_stale "${fixture}" 10
+  session_has_outstanding_tool "${fixture}" && pass "future Codex paired call is active" || fail "future Codex paired call is active" "reported inactive"
+
+  fixture="${codex_dir}/generic-complete.jsonl"
+  write_fixture "${fixture}" codex-generic-complete
+  make_stale "${fixture}" 10
+  session_has_outstanding_tool "${fixture}" && fail "future Codex paired output clears call" "reported active" || pass "future Codex paired output clears call"
+
+  fixture="${codex_dir}/malformed.jsonl"
+  printf '%s\n' '{"type":"response_item","payload":' > "${fixture}"
+  make_stale "${fixture}" 10
+  session_has_outstanding_tool "${fixture}" && pass "malformed transcript fails safe active" || fail "malformed transcript fails safe active" "reported inactive"
+
+  JQ_BIN=/not/installed/jq
+  session_has_outstanding_tool "${codex_dir}/complete.jsonl" && pass "missing jq fails safe active" || fail "missing jq fails safe active" "reported inactive"
+  JQ_BIN=/usr/bin/jq
+
+  restart_dir="${TEST_TMP}/restart"
+  mkdir -p "${restart_dir}"
+  fixture="${restart_dir}/pending.jsonl"
+  write_fixture "${fixture}" codex-pending
+  make_stale "${fixture}" 10
+  CLAUDE_SESSIONS_DIR="${restart_dir}/no-claude"
+  CODEX_SESSIONS_DIR="${restart_dir}"
+  ACTIVITY_TRACKER_SEEDED=0
+  last_session_discovery=0
+  TRACKED_SESSION_FILES=()
+  ACTIVE_PENDING_FILE=""
+  ACTIVE_PENDING_MTIME=""
+  now=1000
+  agents_active && pass "restart discovers stale pending tool" || fail "restart discovers stale pending tool" "reported inactive"
+  assert_eq "restart caches discovered pending file" "${fixture}" "${ACTIVE_PENDING_FILE}"
+
+  CLAUDE_SESSIONS_DIR="${claude_dir}"
+  CODEX_SESSIONS_DIR="${codex_dir}"
+  ACTIVITY_TRACKER_SEEDED=1
+  last_session_discovery=1000
+  now=1000
+
+  make_stale "${codex_dir}/pending.jsonl" 721
+  TRACKED_SESSION_FILES=("${codex_dir}/pending.jsonl")
+  ACTIVE_PENDING_FILE=""
+  ACTIVE_PENDING_MTIME=""
+  agents_active && fail "expired pending tools are inactive" "reported active" || pass "expired pending tools are inactive"
+
+  make_stale "${claude_dir}/parallel.jsonl" 10
+  TRACKED_SESSION_FILES=("${claude_dir}/parallel.jsonl")
+  ACTIVE_PENDING_FILE=""
+  ACTIVE_PENDING_MTIME=""
+  parse_calls=0
+  session_has_outstanding_tool() { parse_calls=$((parse_calls + 1)); return 0; }
+  agents_active
+  agents_active
+  assert_eq "unchanged pending transcript is parsed once" 1 "${parse_calls}"
+}
+
+run_loop_case() {
+  local name="$1" lid_state="$2" battery_state="$3" pct_value="$4" agent_state="$5" cooldown="$6"
+  local expected_sleep="$7" expected_set="$8" expected_desired="$9" sleepnow_status="${10:-0}" expected_cooldown="${11:-$6}"
+  local current_sleep="${12:-1}" thermal_value="${13:-Nominal}" initial_hot_count="${14:-0}"
+  local body output
+  body="$(awk '/^while true; do$/ { capture=1; next } capture && /^  sleep "\$\{POLL_INTERVAL_SECONDS\}"$/ { exit } capture { print }' "${SCRIPT}")"
+  output="$({
+    BATTERY_THRESHOLD=50 THERMAL_TRIGGER_RANK=2 HOT_READS_BEFORE_SLEEP=2 COOLDOWN_SECONDS=300 DRY_RUN=0
+    AGENT_GRACE_MINUTES=5 POLL_INTERVAL_SECONDS=15 LOG_FILE=""
+    hot_count="${initial_hot_count}" cooldown_until="${cooldown}" last_logged="" slept=0 set_calls=""
+    date() { [[ "${1:-}" == "+%s" ]] && printf '1000\n' || command date "$@"; }
+    battery_pct() { printf '%s\n' "${pct_value}"; }
+    agents_active() { (( agent_state )); }
+    lid_closed() { (( lid_state )); }
+    on_battery() { (( battery_state )); }
+    thermal_level() { printf '%s\n' "${thermal_value}"; }
+    rank_of() { [[ "$1" == "Nominal" ]] && printf '0\n' || printf '2\n'; }
+    current_disablesleep() { printf '%s\n' "${current_sleep}"; }
+    set_sleep() { set_calls="${set_calls}$1"; }
+    pmset() { if [[ "${1:-}" == "sleepnow" ]]; then slept=1; return "${sleepnow_status}"; fi; }
+    log() { :; }
+    sleep() { :; }
+    for _iteration in 1; do eval "${body}"; done
+    printf 'slept=%s set=%s desired=%s cooldown=%s\n' "${slept}" "${set_calls}" "${desired:-unset}" "${cooldown_until}"
+  } 2>&1)"
+  assert_eq "${name}" "slept=${expected_sleep} set=${expected_set} desired=${expected_desired} cooldown=${expected_cooldown}" "${output}"
+}
+
+test_release_truth_table() {
+  run_loop_case "active, lid shut, battery: keep awake" 1 1 80 1 0 0 "" 1 0 0
+  run_loop_case "idle, lid shut, battery: force sleep" 1 1 80 0 0 1 0 0 0 1300
+  run_loop_case "idle, lid open, battery: release only" 0 1 80 0 0 0 0 0 0 0
+  run_loop_case "idle, lid shut, AC: release only" 1 0 80 0 0 0 0 0 0 0
+  run_loop_case "low battery, lid shut: force sleep" 1 1 40 1 0 1 0 0 0 1300
+  run_loop_case "failed sleepnow: retry without cooldown" 1 1 80 0 0 1 0 0 1 0
+  run_loop_case "already released after DarkWake: force sleep" 1 1 80 0 0 1 "" 0 0 1300 0
+  run_loop_case "failed thermal sleepnow: retry without cooldown" 1 1 80 1 0 1 0 unset 1 0 1 Heavy 1
+  run_loop_case "unreadable battery, lid shut: release only" 1 1 "" 1 0 0 0 0 0 0
+  run_loop_case "release during cooldown: release only" 1 1 80 0 1100 0 0 0 0 1100
+}
+
+test_activity_signal
+test_release_truth_table
+
+if (( failures > 0 )); then
+  printf '\n%d test(s) failed\n' "${failures}" >&2
+  exit 1
+fi
+printf '\nAll tests passed\n'
