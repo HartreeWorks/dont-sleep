@@ -33,55 +33,65 @@ make_stale() {
   fi
 }
 
+set_mtime_epoch() {
+  local path="$1" epoch="$2" stamp
+  stamp="$(date -r "${epoch}" '+%Y%m%d%H%M.%S')"
+  touch -t "${stamp}" "${path}"
+}
+
 write_fixture() {
-  local path="$1" kind="$2"
+  local path="$1" kind="$2" timestamp="${FIXTURE_TIMESTAMP:-2023-11-14T22:08:20Z}"
   case "${kind}" in
     claude-pending)
-      printf '%s\n' '{"type":"assistant","message":{"role":"assistant","content":[{"type":"tool_use","id":"toolu_1","name":"Bash","input":{}}]}}' > "${path}"
+      printf '%s\n' "{\"timestamp\":\"${timestamp}\",\"type\":\"assistant\",\"message\":{\"role\":\"assistant\",\"content\":[{\"type\":\"tool_use\",\"id\":\"toolu_1\",\"name\":\"${FIXTURE_TOOL_NAME:-Bash}\",\"input\":{}}]}}" > "${path}"
       ;;
     claude-complete)
       write_fixture "${path}" claude-pending
-      printf '%s\n' '{"type":"user","message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"toolu_1","content":"done"}]}}' >> "${path}"
+      printf '%s\n' "{\"timestamp\":\"${timestamp}\",\"type\":\"user\",\"message\":{\"role\":\"user\",\"content\":[{\"type\":\"tool_result\",\"tool_use_id\":\"toolu_1\",\"content\":\"done\"}]}}" >> "${path}"
       ;;
     claude-abandoned)
       write_fixture "${path}" claude-pending
-      printf '%s\n' '{"type":"user","message":{"role":"user","content":"new prompt"}}' >> "${path}"
+      printf '%s\n' "{\"timestamp\":\"${timestamp}\",\"type\":\"user\",\"message\":{\"role\":\"user\",\"content\":\"new prompt\"}}" >> "${path}"
       ;;
     claude-parallel-one-pending)
       write_fixture "${path}" claude-pending
-      printf '%s\n' '{"type":"assistant","message":{"role":"assistant","content":[{"type":"tool_use","id":"toolu_2","name":"Bash","input":{}}]}}' >> "${path}"
-      printf '%s\n' '{"type":"user","message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"toolu_2","content":"done"}]}}' >> "${path}"
+      printf '%s\n' "{\"timestamp\":\"${timestamp}\",\"type\":\"assistant\",\"message\":{\"role\":\"assistant\",\"content\":[{\"type\":\"tool_use\",\"id\":\"toolu_2\",\"name\":\"Bash\",\"input\":{}}]}}" >> "${path}"
+      printf '%s\n' "{\"timestamp\":\"${timestamp}\",\"type\":\"user\",\"message\":{\"role\":\"user\",\"content\":[{\"type\":\"tool_result\",\"tool_use_id\":\"toolu_2\",\"content\":\"done\"}]}}" >> "${path}"
       ;;
     claude-waiting-for-user)
-      printf '%s\n' '{"type":"assistant","message":{"role":"assistant","content":[{"type":"tool_use","id":"toolu_ask","name":"AskUserQuestion","input":{}}]}}' > "${path}"
+      printf '%s\n' "{\"timestamp\":\"${timestamp}\",\"type\":\"assistant\",\"message\":{\"role\":\"assistant\",\"content\":[{\"type\":\"tool_use\",\"id\":\"toolu_ask\",\"name\":\"AskUserQuestion\",\"input\":{}}]}}" > "${path}"
       ;;
     claude-meta-during-tool)
       write_fixture "${path}" claude-pending
-      printf '%s\n' '{"type":"user","isMeta":true,"message":{"role":"user","content":"internal metadata"}}' >> "${path}"
+      printf '%s\n' "{\"timestamp\":\"${timestamp}\",\"type\":\"user\",\"isMeta\":true,\"message\":{\"role\":\"user\",\"content\":\"internal metadata\"}}" >> "${path}"
       ;;
     codex-pending)
-      printf '%s\n' '{"type":"event_msg","payload":{"type":"task_started"}}' > "${path}"
-      printf '%s\n' '{"type":"response_item","payload":{"type":"custom_tool_call","call_id":"call_1","name":"exec","status":"completed"}}' >> "${path}"
+      printf '%s\n' "{\"timestamp\":\"${timestamp}\",\"type\":\"event_msg\",\"payload\":{\"type\":\"task_started\"}}" > "${path}"
+      printf '%s\n' "{\"timestamp\":\"${timestamp}\",\"type\":\"response_item\",\"payload\":{\"type\":\"custom_tool_call\",\"call_id\":\"call_1\",\"name\":\"${FIXTURE_TOOL_NAME:-exec}\",\"status\":\"completed\"}}" >> "${path}"
       ;;
     codex-complete)
       write_fixture "${path}" codex-pending
-      printf '%s\n' '{"type":"response_item","payload":{"type":"custom_tool_call_output","call_id":"call_1","output":"done"}}' >> "${path}"
+      printf '%s\n' "{\"timestamp\":\"${timestamp}\",\"type\":\"response_item\",\"payload\":{\"type\":\"custom_tool_call_output\",\"call_id\":\"call_1\",\"output\":\"done\"}}" >> "${path}"
       ;;
     codex-task-complete)
       write_fixture "${path}" codex-pending
-      printf '%s\n' '{"type":"event_msg","payload":{"type":"task_complete"}}' >> "${path}"
+      printf '%s\n' "{\"timestamp\":\"${timestamp}\",\"type\":\"event_msg\",\"payload\":{\"type\":\"task_complete\"}}" >> "${path}"
       ;;
     codex-waiting-for-user)
-      printf '%s\n' '{"type":"event_msg","payload":{"type":"task_started"}}' > "${path}"
-      printf '%s\n' '{"type":"response_item","payload":{"type":"function_call","call_id":"call_ask","name":"request_user_input"}}' >> "${path}"
+      printf '%s\n' "{\"timestamp\":\"${timestamp}\",\"type\":\"event_msg\",\"payload\":{\"type\":\"task_started\"}}" > "${path}"
+      printf '%s\n' "{\"timestamp\":\"${timestamp}\",\"type\":\"response_item\",\"payload\":{\"type\":\"function_call\",\"call_id\":\"call_ask\",\"name\":\"request_user_input\"}}" >> "${path}"
       ;;
     codex-generic-pending)
-      printf '%s\n' '{"type":"event_msg","payload":{"type":"task_started"}}' > "${path}"
-      printf '%s\n' '{"type":"response_item","payload":{"type":"local_shell_call","call_id":"call_shell","name":"shell"}}' >> "${path}"
+      printf '%s\n' "{\"timestamp\":\"${timestamp}\",\"type\":\"event_msg\",\"payload\":{\"type\":\"task_started\"}}" > "${path}"
+      printf '%s\n' "{\"timestamp\":\"${timestamp}\",\"type\":\"response_item\",\"payload\":{\"type\":\"local_shell_call\",\"call_id\":\"call_shell\",\"name\":\"shell\"}}" >> "${path}"
       ;;
     codex-generic-complete)
       write_fixture "${path}" codex-generic-pending
-      printf '%s\n' '{"type":"response_item","payload":{"type":"local_shell_call_output","call_id":"call_shell","output":"done"}}' >> "${path}"
+      printf '%s\n' "{\"timestamp\":\"${timestamp}\",\"type\":\"response_item\",\"payload\":{\"type\":\"local_shell_call_output\",\"call_id\":\"call_shell\",\"output\":\"done\"}}" >> "${path}"
+      ;;
+    codex-fast-pending)
+      printf '%s\n' "{\"timestamp\":\"${timestamp}\",\"type\":\"event_msg\",\"payload\":{\"type\":\"task_started\"}}" > "${path}"
+      printf '%s\n' "{\"timestamp\":\"${timestamp}\",\"type\":\"response_item\",\"payload\":{\"type\":\"function_call\",\"call_id\":\"call_fast\",\"name\":\"view_image\"}}" >> "${path}"
       ;;
   esac
 }
@@ -90,6 +100,9 @@ test_activity_signal() {
   local functions claude_dir="${TEST_TMP}/claude" codex_dir="${TEST_TMP}/codex" fixture
   mkdir -p "${claude_dir}" "${codex_dir}"
   functions="$(awk '
+    /^read_transcript_tail\(\)/ { capture=1 }
+    /^parse_latest_event_epoch\(\)/ { capture=1 }
+    /^session_has_recent_event\(\)/ { capture=1 }
     /^session_has_outstanding_tool\(\)/ { capture=1 }
     /^track_session_file\(\)/ { capture=1 }
     /^agents_active\(\)/ { capture=1 }
@@ -105,7 +118,8 @@ test_activity_signal() {
   CLAUDE_SESSIONS_DIR="${claude_dir}"
   CODEX_SESSIONS_DIR="${codex_dir}"
   AGENT_GRACE_MINUTES=5
-  OUTSTANDING_TOOL_MAX_MINUTES=720
+  FAST_TOOL_MAX_MINUTES=10
+  OUTSTANDING_TOOL_MAX_MINUTES=60
   SESSION_DISCOVERY_INTERVAL_SECONDS=120
   JQ_BIN=/usr/bin/jq
   ACTIVITY_TRACKER_SEEDED=1
@@ -113,6 +127,12 @@ test_activity_signal() {
   TRACKED_SESSION_FILES=()
   ACTIVE_PENDING_FILE=""
   ACTIVE_PENDING_MTIME=""
+  ACTIVE_PENDING_UNTIL=0
+  ACTIVE_AGENT_REASON=""
+  RECENT_EVENT_CACHE_FILES=()
+  RECENT_EVENT_CACHE_MTIMES=()
+  RECENT_EVENT_CACHE_EPOCHS=()
+  now=1700000000
 
   fixture="${claude_dir}/pending.jsonl"
   write_fixture "${fixture}" claude-pending
@@ -147,10 +167,50 @@ test_activity_signal() {
   make_stale "${fixture}" 10
   session_has_outstanding_tool "${fixture}" && pass "Claude metadata does not clear pending tool" || fail "Claude metadata does not clear pending tool" "reported inactive"
 
+  fixture="${claude_dir}/expired-edit.jsonl"
+  FIXTURE_TIMESTAMP=2023-11-14T22:02:20Z FIXTURE_TOOL_NAME=Edit write_fixture "${fixture}" claude-pending
+  touch "${fixture}"
+  session_has_outstanding_tool "${fixture}" && fail "fast Claude tool expires after ten minutes" "reported active" || pass "fast Claude tool expires after ten minutes"
+
+  fixture="${claude_dir}/active-edit.jsonl"
+  FIXTURE_TIMESTAMP=2023-11-14T22:06:20.123Z FIXTURE_TOOL_NAME=Edit write_fixture "${fixture}" claude-pending
+  make_stale "${fixture}" 10
+  session_has_outstanding_tool "${fixture}" && pass "fast Claude tool remains active for seven minutes" || fail "fast Claude tool remains active for seven minutes" "reported inactive"
+
+  fixture="${claude_dir}/long-bash.jsonl"
+  FIXTURE_TIMESTAMP=2023-11-14T21:43:20Z FIXTURE_TOOL_NAME=Bash write_fixture "${fixture}" claude-pending
+  make_stale "${fixture}" 10
+  session_has_outstanding_tool "${fixture}" && pass "long Claude tool remains active for thirty minutes" || fail "long Claude tool remains active for thirty minutes" "reported inactive"
+
+  fixture="${claude_dir}/long-subagent.jsonl"
+  FIXTURE_TIMESTAMP=2023-11-14T21:43:20Z FIXTURE_TOOL_NAME=Task write_fixture "${fixture}" claude-pending
+  make_stale "${fixture}" 10
+  session_has_outstanding_tool "${fixture}" && pass "Claude subagent remains active for thirty minutes" || fail "Claude subagent remains active for thirty minutes" "reported inactive"
+
+  fixture="${claude_dir}/expired-bash.jsonl"
+  FIXTURE_TIMESTAMP=2023-11-14T21:12:20Z FIXTURE_TOOL_NAME=Bash write_fixture "${fixture}" claude-pending
+  touch "${fixture}"
+  session_has_outstanding_tool "${fixture}" && fail "all tools expire after one hour" "reported active" || pass "all tools expire after one hour"
+
   fixture="${codex_dir}/pending.jsonl"
   write_fixture "${fixture}" codex-pending
   make_stale "${fixture}" 10
   session_has_outstanding_tool "${fixture}" && pass "Codex pending tool is active" || fail "Codex pending tool is active" "reported inactive"
+
+  fixture="${codex_dir}/long-exec.jsonl"
+  FIXTURE_TIMESTAMP=2023-11-14T21:43:20Z write_fixture "${fixture}" codex-pending
+  make_stale "${fixture}" 10
+  session_has_outstanding_tool "${fixture}" && pass "Codex exec remains active for thirty minutes" || fail "Codex exec remains active for thirty minutes" "reported inactive"
+
+  fixture="${codex_dir}/long-shell.jsonl"
+  FIXTURE_TIMESTAMP=2023-11-14T21:43:20Z write_fixture "${fixture}" codex-generic-pending
+  make_stale "${fixture}" 10
+  session_has_outstanding_tool "${fixture}" && pass "Codex shell call remains active for thirty minutes" || fail "Codex shell call remains active for thirty minutes" "reported inactive"
+
+  fixture="${codex_dir}/expired-fast.jsonl"
+  FIXTURE_TIMESTAMP=2023-11-14T22:02:20Z write_fixture "${fixture}" codex-fast-pending
+  make_stale "${fixture}" 10
+  session_has_outstanding_tool "${fixture}" && fail "fast Codex tool expires after ten minutes" "reported active" || pass "fast Codex tool expires after ten minutes"
 
   fixture="${codex_dir}/complete.jsonl"
   write_fixture "${fixture}" codex-complete
@@ -179,12 +239,76 @@ test_activity_signal() {
 
   fixture="${codex_dir}/malformed.jsonl"
   printf '%s\n' '{"type":"response_item","payload":' > "${fixture}"
-  make_stale "${fixture}" 10
+  set_mtime_epoch "${fixture}" $((now - 30 * 60))
   session_has_outstanding_tool "${fixture}" && pass "malformed transcript fails safe active" || fail "malformed transcript fails safe active" "reported inactive"
+  now=$((now + 31 * 60))
+  session_has_outstanding_tool "${fixture}" && fail "malformed transcript fallback expires after one hour" "reported active" || pass "malformed transcript fallback expires after one hour"
+  now=$((now - 31 * 60))
 
   JQ_BIN=/not/installed/jq
-  session_has_outstanding_tool "${codex_dir}/complete.jsonl" && pass "missing jq fails safe active" || fail "missing jq fails safe active" "reported inactive"
+  fixture="${codex_dir}/missing-jq.jsonl"
+  write_fixture "${fixture}" codex-complete
+  set_mtime_epoch "${fixture}" $((now - 30 * 60))
+  session_has_outstanding_tool "${fixture}" && pass "missing jq fails safe active" || fail "missing jq fails safe active" "reported inactive"
+  now=$((now + 31 * 60))
+  session_has_outstanding_tool "${fixture}" && fail "missing jq fallback expires after one hour" "reported active" || pass "missing jq fallback expires after one hour"
+  now=$((now - 31 * 60))
   JQ_BIN=/usr/bin/jq
+
+  fixture="${codex_dir}/unreadable.jsonl"
+  write_fixture "${fixture}" codex-pending
+  set_mtime_epoch "${fixture}" $((now - 30 * 60))
+  original_read_transcript_tail="$(declare -f read_transcript_tail)"
+  read_transcript_tail() { return 1; }
+  session_has_recent_event "${fixture}" && pass "unreadable recent transcript fails safe active" || fail "unreadable recent transcript fails safe active" "reported inactive"
+  session_has_outstanding_tool "${fixture}" && pass "unreadable pending transcript fails safe active" || fail "unreadable pending transcript fails safe active" "reported inactive"
+  now=$((now + 31 * 60))
+  session_has_outstanding_tool "${fixture}" && fail "unreadable transcript fallback expires after one hour" "reported active" || pass "unreadable transcript fallback expires after one hour"
+  now=$((now - 31 * 60))
+  eval "${original_read_transcript_tail}"
+
+  fixture="${claude_dir}/old-event-new-mtime.jsonl"
+  FIXTURE_TIMESTAMP=2023-11-14T20:13:20Z write_fixture "${fixture}" claude-complete
+  touch "${fixture}"
+  CLAUDE_SESSIONS_DIR="${claude_dir}"
+  CODEX_SESSIONS_DIR="${TEST_TMP}/no-codex"
+  ACTIVITY_TRACKER_SEEDED=1
+  last_session_discovery="${now}"
+  TRACKED_SESSION_FILES=()
+  ACTIVE_PENDING_FILE=""
+  ACTIVE_PENDING_MTIME=""
+  ACTIVE_PENDING_UNTIL=0
+  agents_active && fail "metadata-only file touch is inactive" "reported active" || pass "metadata-only file touch is inactive"
+
+  fixture="${claude_dir}/recent-event.jsonl"
+  FIXTURE_TIMESTAMP=2023-11-14T22:08:20.123Z write_fixture "${fixture}" claude-complete
+  touch "${fixture}"
+  agents_active && pass "fractional timestamped recent event is active" || fail "fractional timestamped recent event is active" "reported inactive"
+  make_stale "${fixture}" 10
+
+  fixture="${claude_dir}/recent-cache.jsonl"
+  FIXTURE_TIMESTAMP=2023-11-14T22:08:20Z write_fixture "${fixture}" claude-complete
+  make_stale "${fixture}" 10
+  original_parse_latest_event_epoch="$(declare -f parse_latest_event_epoch)"
+  recent_parse_calls=0
+  parse_latest_event_epoch() {
+    recent_parse_calls=$((recent_parse_calls + 1))
+    SESSION_LATEST_EVENT_EPOCH="${now}"
+  }
+  RECENT_EVENT_CACHE_FILES=()
+  RECENT_EVENT_CACHE_MTIMES=()
+  RECENT_EVENT_CACHE_EPOCHS=()
+  session_has_recent_event "${fixture}"
+  session_has_recent_event "${fixture}"
+  assert_eq "unchanged recent transcript is parsed once" 1 "${recent_parse_calls}"
+  touch "${fixture}"
+  session_has_recent_event "${fixture}"
+  assert_eq "changed recent transcript invalidates cache" 2 "${recent_parse_calls}"
+  eval "${original_parse_latest_event_epoch}"
+  RECENT_EVENT_CACHE_FILES=()
+  RECENT_EVENT_CACHE_MTIMES=()
+  RECENT_EVENT_CACHE_EPOCHS=()
+  make_stale "${fixture}" 10
 
   restart_dir="${TEST_TMP}/restart"
   mkdir -p "${restart_dir}"
@@ -198,31 +322,41 @@ test_activity_signal() {
   TRACKED_SESSION_FILES=()
   ACTIVE_PENDING_FILE=""
   ACTIVE_PENDING_MTIME=""
-  now=1000
   agents_active && pass "restart discovers stale pending tool" || fail "restart discovers stale pending tool" "reported inactive"
   assert_eq "restart caches discovered pending file" "${fixture}" "${ACTIVE_PENDING_FILE}"
 
   CLAUDE_SESSIONS_DIR="${claude_dir}"
   CODEX_SESSIONS_DIR="${codex_dir}"
   ACTIVITY_TRACKER_SEEDED=1
-  last_session_discovery=1000
-  now=1000
+  last_session_discovery="${now}"
 
-  make_stale "${codex_dir}/pending.jsonl" 721
-  TRACKED_SESSION_FILES=("${codex_dir}/pending.jsonl")
+  fixture="${codex_dir}/expired-pending.jsonl"
+  FIXTURE_TIMESTAMP=2023-11-14T21:12:20Z write_fixture "${fixture}" codex-pending
+  touch "${fixture}"
+  TRACKED_SESSION_FILES=("${fixture}")
   ACTIVE_PENDING_FILE=""
   ACTIVE_PENDING_MTIME=""
+  ACTIVE_PENDING_UNTIL=0
   agents_active && fail "expired pending tools are inactive" "reported active" || pass "expired pending tools are inactive"
 
   make_stale "${claude_dir}/parallel.jsonl" 10
   TRACKED_SESSION_FILES=("${claude_dir}/parallel.jsonl")
   ACTIVE_PENDING_FILE=""
   ACTIVE_PENDING_MTIME=""
+  ACTIVE_PENDING_UNTIL=0
   parse_calls=0
-  session_has_outstanding_tool() { parse_calls=$((parse_calls + 1)); return 0; }
+  stub_expiry=$((now + 60))
+  session_has_outstanding_tool() {
+    parse_calls=$((parse_calls + 1))
+    SESSION_PENDING_UNTIL="${stub_expiry}"
+    (( now <= stub_expiry ))
+  }
   agents_active
   agents_active
   assert_eq "unchanged pending transcript is parsed once" 1 "${parse_calls}"
+
+  now=$((now + 61))
+  agents_active && fail "cached pending tool expires without a file write" "reported active" || pass "cached pending tool expires without a file write"
 }
 
 run_loop_case() {

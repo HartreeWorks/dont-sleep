@@ -42,13 +42,13 @@ The default battery threshold is 50%. To change it, edit the `50` in `ProgramArg
 Every 15 seconds, `dont-sleep` checks agent activity, battery level, lid state and thermal pressure:
 
 - It enables `pmset disablesleep` while a Claude Code or Codex agent is active and the battery is at least 50%.
-- It recognises long, quiet tool calls as active work. Tools waiting for human input do not count after the five-minute activity grace.
+- It recognises long, quiet shell commands and subagents as active work for up to one hour. Normally fast tools such as reads and edits expire after 10 minutes. Tools waiting for human input do not count after the five-minute activity grace.
 - When the agent stops or the battery falls below 50%, it releases the override. If the lid is shut on battery, it forces sleep because macOS does not retry a suppressed lid-close event.
 - If a lid-shut Mac reaches Heavy thermal pressure twice in succession, it releases the override and forces sleep.
 
 The override is armed while the lid is still open. This matters because macOS can sleep before the daemon's next poll if it waits to observe the lid closing.
 
-Agent activity comes from `.jsonl` transcripts under `~/.claude/projects` and `~/.codex/sessions`. Recent transcript writes cover normal work; unmatched tool calls cover long steps without output.
+Agent activity comes from `.jsonl` transcripts under `~/.claude/projects` and `~/.codex/sessions`. Recent timestamped events cover normal work; unmatched tool calls cover long steps without output. File modification time alone is not treated as activity because metadata maintenance can touch old transcripts.
 
 ## Updating
 
@@ -71,7 +71,7 @@ The script needs root access for `pmset disablesleep` and thermal-pressure readi
 
 ## Configuration and logs
 
-Advanced settings—including the five-minute activity grace, thermal trigger, polling interval and five-minute post-sleep cooldown—are constants near the top of `dont-sleep.sh`.
+Advanced settings—including the five-minute activity grace, 10-minute fast-tool limit, one-hour absolute tool limit, thermal trigger, polling interval and five-minute post-sleep cooldown—are constants near the top of `dont-sleep.sh`.
 
 State changes are logged to `~/Library/Logs/dont-sleep.log`. Logs older than 14 days are pruned at startup.
 
